@@ -36,6 +36,7 @@ LOG = logging.getLogger(__name__)
 
 
 class BaseVolumeUtils(object):
+    _FILE_DEVICE_DISK = 7
 
     def __init__(self, host='.'):
         if sys.platform == 'win32':
@@ -118,22 +119,28 @@ class BaseVolumeUtils(object):
                 if device_number == drive_number:
                     return initiator_session.SessionId
 
-    def get_device_number_for_target(self, target_iqn, target_lun):
+    def _get_devices_for_target(self, target_iqn):
         initiator_sessions = self._conn_wmi.query("SELECT * FROM "
                                                   "MSiSCSIInitiator_Session"
                                                   "Class WHERE TargetName='%s'"
                                                   % target_iqn)
         if not initiator_sessions:
-            return None
+            return []
 
-        devices = initiator_sessions[0].Devices
+        return initiator_sessions[0].Devices
 
-        if not devices:
-            return None
+    def get_device_number_for_target(self, target_iqn, target_lun):
+        devices = self._get_devices_for_target(target_iqn)
 
         for device in devices:
             if device.ScsiLun == target_lun:
                 return device.DeviceNumber
+
+    def get_target_lun_count(self, target_iqn):
+        devices = self._get_devices_for_target(target_iqn)
+        disk_devices = [device for device in devices
+                        if device.DeviceType == self._FILE_DEVICE_DISK]
+        return len(disk_devices)
 
     def get_target_from_disk_path(self, disk_path):
         initiator_sessions = self._conn_wmi.MSiSCSIInitiator_SessionClass()

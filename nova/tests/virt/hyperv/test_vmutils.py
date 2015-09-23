@@ -30,6 +30,7 @@ class VMUtilsTestCase(test.NoDBTestCase):
     _FAKE_JOB_PATH = 'fake_job_path'
     _FAKE_RET_VAL = 0
     _FAKE_RET_VAL_BAD = -1
+    _FAKE_PATH = "fake_path"
     _FAKE_CTRL_PATH = 'fake_ctrl_path'
     _FAKE_CTRL_ADDR = 0
     _FAKE_DRIVE_ADDR = 0
@@ -202,7 +203,7 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
     def _create_mock_disks(self):
         mock_rasd1 = mock.MagicMock()
-        mock_rasd1.ResourceSubType = self._vmutils._IDE_DISK_RES_SUB_TYPE
+        mock_rasd1.ResourceSubType = self._vmutils._HARD_DISK_RES_SUB_TYPE
         mock_rasd1.HostResource = [self._FAKE_VHD_PATH]
         mock_rasd1.Connection = [self._FAKE_VHD_PATH]
         mock_rasd1.Parent = self._FAKE_CTRL_PATH
@@ -248,6 +249,19 @@ class VMUtilsTestCase(test.NoDBTestCase):
         self._prepare_get_vm_controller(self._vmutils._SCSI_CTRL_RES_SUB_TYPE)
         path = self._vmutils.get_vm_scsi_controller(self._FAKE_VM_NAME)
         self.assertEqual(self._FAKE_RES_PATH, path)
+
+    def test_get_free_controller_slot_exception(self):
+        fake_drive = mock.MagicMock()
+        type(fake_drive).AddressOnParent = mock.PropertyMock(
+            side_effect=xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER))
+
+        with mock.patch.object(self._vmutils,
+                'get_attached_disks') as fake_get_attached_disks:
+            fake_get_attached_disks.return_value = (
+                [fake_drive] * constants.SCSI_CONTROLLER_SLOTS_NUMBER)
+            self.assertRaises(vmutils.HyperVException,
+                              self._vmutils.get_free_controller_slot,
+                              mock.sentinel.scsi_controller_path)
 
     def test_get_vm_ide_controller(self):
         self._prepare_get_vm_controller(self._vmutils._IDE_CTRL_RES_SUB_TYPE)
@@ -505,7 +519,7 @@ class VMUtilsTestCase(test.NoDBTestCase):
         self._vmutils._conn.query.return_value = [mock_disk_1, mock_disk_2]
 
         physical_disk = self._vmutils._get_mounted_disk_resource_from_path(
-            self._FAKE_MOUNTED_DISK_PATH)
+            self._FAKE_MOUNTED_DISK_PATH, True)
 
         self.assertEqual(mock_disk_2, physical_disk)
 
@@ -519,7 +533,7 @@ class VMUtilsTestCase(test.NoDBTestCase):
         mock_disk = mock.MagicMock()
         mock_disk.HostResource = [self._FAKE_HOST_RESOURCE]
         mock_disk.path.return_value.RelPath = self._FAKE_RES_PATH
-        mock_disk.ResourceSubType = self._vmutils._IDE_DISK_RES_SUB_TYPE
+        mock_disk.ResourceSubType = self._vmutils._HARD_DISK_RES_SUB_TYPE
         self._vmutils._conn.query.return_value = [mock_disk]
 
         return mock_disk
@@ -637,7 +651,8 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
         response = self._vmutils._create_vm_obj(vs_man_svc=mock_vs_man_svc,
                                                 vm_name='fake vm',
-                                                notes='fake notes')
+                                                notes='fake notes',
+                                                dynamic_memory_ratio=1.0)
 
         _conn.new.assert_called_once_with()
         self.assertEqual(mock_vs_gs_data.ElementName, 'fake vm')

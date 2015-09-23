@@ -63,10 +63,10 @@ class VMUtils(object):
 
     # These constants can be overridden by inherited classes
     _PHYS_DISK_RES_SUB_TYPE = 'Microsoft Physical Disk Drive'
-    _DISK_RES_SUB_TYPE = 'Microsoft Synthetic Disk Drive'
-    _DVD_RES_SUB_TYPE = 'Microsoft Synthetic DVD Drive'
-    _IDE_DISK_RES_SUB_TYPE = 'Microsoft Virtual Hard Disk'
-    _IDE_DVD_RES_SUB_TYPE = 'Microsoft Virtual CD/DVD Disk'
+    _DISK_DRIVE_RES_SUB_TYPE = 'Microsoft Synthetic Disk Drive'
+    _DVD_DRIVE_RES_SUB_TYPE = 'Microsoft Synthetic DVD Drive'
+    _HARD_DISK_RES_SUB_TYPE = 'Microsoft Virtual Hard Disk'
+    _DVD_DISK_RES_SUB_TYPE = 'Microsoft Virtual CD/DVD Disk'
     _IDE_CTRL_RES_SUB_TYPE = 'Microsoft Emulated IDE Controller'
     _SCSI_CTRL_RES_SUB_TYPE = 'Microsoft Synthetic SCSI Controller'
     _SERIAL_PORT_RES_SUB_TYPE = 'Microsoft Serial Port'
@@ -162,6 +162,7 @@ class VMUtils(object):
         return summary_info_dict
 
     def _lookup_vm_check(self, vm_name):
+
         vm = self._lookup_vm(vm_name)
         if not vm:
             raise exception.NotFound(_('VM not found: %s') % vm_name)
@@ -244,7 +245,8 @@ class VMUtils(object):
         vs_man_svc = self._conn.Msvm_VirtualSystemManagementService()[0]
 
         LOG.debug('Creating VM %s', vm_name)
-        vm = self._create_vm_obj(vs_man_svc, vm_name, notes)
+        vm = self._create_vm_obj(vs_man_svc, vm_name, notes,
+                                 dynamic_memory_ratio)
 
         vmsetting = self._get_vm_setting_data(vm)
 
@@ -254,7 +256,7 @@ class VMUtils(object):
         LOG.debug('Set vCPUs for vm %s', vm_name)
         self._set_vm_vcpus(vm, vmsetting, vcpus_num, limit_cpu_features)
 
-    def _create_vm_obj(self, vs_man_svc, vm_name, notes):
+    def _create_vm_obj(self, vs_man_svc, vm_name, notes, dynamic_memory_ratio):
         vs_gs_data = self._conn.Msvm_VirtualSystemGlobalSettingData.new()
         vs_gs_data.ElementName = vm_name
         # Don't start automatically on host boot
@@ -283,7 +285,6 @@ class VMUtils(object):
 
     def get_vm_scsi_controller(self, vm_name):
         vm = self._lookup_vm_check(vm_name)
-
         vmsettings = vm.associators(
             wmi_result_class=self._VIRTUAL_SYSTEM_SETTING_DATA_CLASS)
         rasds = vmsettings[0].associators(
@@ -307,13 +308,16 @@ class VMUtils(object):
 
     def get_attached_disks(self, scsi_controller_path):
         volumes = self._conn.query("SELECT * FROM %(class_name)s "
-                                   "WHERE ResourceSubType = "
-                                   "'%(res_sub_type)s' AND "
-                                   "Parent = '%(parent)s'" %
+                                   "WHERE (ResourceSubType = "
+                                   "'%(res_sub_type)s' OR "
+                                   "ResourceSubType='%(res_sub_type_virt)s')"
+                                   " AND Parent = '%(parent)s'" %
                                    {"class_name":
                                     self._RESOURCE_ALLOC_SETTING_DATA_CLASS,
                                     'res_sub_type':
                                     self._PHYS_DISK_RES_SUB_TYPE,
+                                    'res_sub_type_virt':
+                                    self._DISK_DRIVE_RES_SUB_TYPE,
                                     'parent':
                                     scsi_controller_path.replace("'", "''")})
         return volumes
@@ -334,31 +338,35 @@ class VMUtils(object):
                                  "res_sub_type": resource_sub_type})[0]
 
     def attach_ide_drive(self, vm_name, path, ctrller_addr, drive_addr,
-                         drive_type=constants.IDE_DISK):
-        """Create an IDE drive and attach it to the vm."""
+                         drive_type=constants.DISK):
+        vm = self._lookup_vm_check(vm_name)
+        ctrller_path = self._get_vm_ide_controller(vm, ctrller_addr)
+        self.attach_drive(vm_name, path, ctrller_path, drive_addr, drive_type)
+
+    def attach_drive(self, vm_name, path, ctrller_path, drive_addr,
+                     drive_type=constants.DISK):
+        """Create a drive and attach it to the vm."""
 
         vm = self._lookup_vm_check(vm_name)
 
-        ctrller_path = self._get_vm_ide_controller(vm, ctrller_addr)
-
-        if drive_type == constants.IDE_DISK:
-            res_sub_type = self._DISK_RES_SUB_TYPE
-        elif drive_type == constants.IDE_DVD:
-            res_sub_type = self._DVD_RES_SUB_TYPE
+        if drive_type == constants.DISK:
+            res_sub_type = self._DISK_DRIVE_RES_SUB_TYPE
+        elif drive_type == constants.DVD:
+            res_sub_type = self._DVD_DRIVE_RES_SUB_TYPE
 
         drive = self._get_new_resource_setting_data(res_sub_type)
 
-        # Set the IDE ctrller as parent.
+        # Set the ctrller as parent.
         drive.Parent = ctrller_path
         drive.Address = drive_addr
         # Add the cloned disk drive object to the vm.
         new_resources = self._add_virt_resource(drive, vm.path_())
         drive_path = new_resources[0]
 
-        if drive_type == constants.IDE_DISK:
-            res_sub_type = self._IDE_DISK_RES_SUB_TYPE
-        elif drive_type == constants.IDE_DVD:
-            res_sub_type = self._IDE_DVD_RES_SUB_TYPE
+        if drive_type == constants.DISK:
+            res_sub_type = self._HARD_DISK_RES_SUB_TYPE
+        elif drive_type == constants.DVD:
+            res_sub_type = self._DVD_DISK_RES_SUB_TYPE
 
         res = self._get_new_resource_setting_data(res_sub_type)
         # Set the new drive as the parent.
@@ -500,8 +508,8 @@ class VMUtils(object):
             wmi_result_class=self._STORAGE_ALLOC_SETTING_DATA_CLASS)
         disk_resources = [r for r in rasds if
                           r.ResourceSubType in
-                          [self._IDE_DISK_RES_SUB_TYPE,
-                           self._IDE_DVD_RES_SUB_TYPE]]
+                          [self._HARD_DISK_RES_SUB_TYPE,
+                           self._DVD_DISK_RES_SUB_TYPE]]
 
         if (self._RESOURCE_ALLOC_SETTING_DATA_CLASS !=
                 self._STORAGE_ALLOC_SETTING_DATA_CLASS):
@@ -619,23 +627,39 @@ class VMUtils(object):
             snapshot_path)
         self.check_ret_val(ret_val, job_path)
 
-    def detach_vm_disk(self, vm_name, disk_path):
+    def detach_vm_disk(self, vm_name, disk_path, is_physical=True):
         vm = self._lookup_vm_check(vm_name)
-        physical_disk = self._get_mounted_disk_resource_from_path(disk_path)
-        if physical_disk:
-            self._remove_virt_resource(physical_disk, vm.path_())
+        disk_resource = self._get_mounted_disk_resource_from_path(disk_path,
+                                                                  is_physical)
 
-    def _get_mounted_disk_resource_from_path(self, disk_path):
-        physical_disks = self._conn.query("SELECT * FROM %(class_name)s "
-                             "WHERE ResourceSubType = '%(res_sub_type)s'" %
-                             {"class_name":
-                              self._RESOURCE_ALLOC_SETTING_DATA_CLASS,
-                              'res_sub_type':
-                              self._PHYS_DISK_RES_SUB_TYPE})
-        for physical_disk in physical_disks:
-            if physical_disk.HostResource:
-                if physical_disk.HostResource[0].lower() == disk_path.lower():
-                    return physical_disk
+        if disk_resource:
+            parent = self._conn.query("SELECT * FROM "
+                                      "Msvm_ResourceAllocationSettingData "
+                                      "WHERE __PATH = '%s'" %
+                                      disk_resource.Parent)[0]
+
+            self._remove_virt_resource(disk_resource, vm.path_())
+            if not is_physical:
+                self._remove_virt_resource(parent, vm.path_())
+
+    def _get_mounted_disk_resource_from_path(self, disk_path, is_physical):
+        if is_physical:
+            class_name = self._RESOURCE_ALLOC_SETTING_DATA_CLASS
+            res_sub_type = self._PHYS_DISK_RES_SUB_TYPE
+        else:
+            class_name = self._STORAGE_ALLOC_SETTING_DATA_CLASS
+            res_sub_type = self._HARD_DISK_RES_SUB_TYPE
+
+        disk_resources = self._conn.query("SELECT * FROM %(class_name)s "
+                                          "WHERE ResourceSubType = "
+                                          "'%(res_sub_type)s'" %
+                                          {"class_name": class_name,
+                                           "res_sub_type": res_sub_type})
+
+        for disk_resource in disk_resources:
+            if disk_resource.HostResource:
+                if disk_resource.HostResource[0].lower() == disk_path.lower():
+                    return disk_resource
 
     def get_mounted_disk_by_drive_number(self, device_number):
         mounted_disks = self._conn.query("SELECT * FROM Msvm_DiskDrive "
@@ -659,6 +683,15 @@ class VMUtils(object):
             if disk.HostResource:
                 disk_data[disk.path().RelPath] = disk.HostResource[0]
         return disk_data
+
+    def get_free_controller_slot(self, scsi_controller_path):
+        attached_disks = self.get_attached_disks(scsi_controller_path)
+        used_slots = [int(disk.AddressOnParent) for disk in attached_disks]
+
+        for slot in xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER):
+            if slot not in used_slots:
+                return slot
+        raise HyperVException(_("Exceeded the maximum number of slots"))
 
     def enable_vm_metrics_collection(self, vm_name):
         raise NotImplementedError(_("Metrics collection is not supported on "

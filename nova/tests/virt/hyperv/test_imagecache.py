@@ -21,13 +21,14 @@ from oslo.config import cfg
 from nova import exception
 from nova import test
 from nova.tests import fake_instance
+from nova.tests.virt.hyperv import test_base
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import imagecache
 
 CONF = cfg.CONF
 
 
-class ImageCacheTestCase(test.NoDBTestCase):
+class ImageCacheTestCase(test_base.HyperVBaseTestCase):
     """Unit tests for the Hyper-V ImageCache class."""
 
     FAKE_BASE_DIR = 'fake/base/dir'
@@ -40,20 +41,15 @@ class ImageCacheTestCase(test.NoDBTestCase):
         self.context = 'fake-context'
         self.instance = fake_instance.fake_instance_obj(self.context)
 
-        # utilsfactory will check the host OS version via get_hostutils,
-        # in order to return the proper Utils Class, so it must be mocked.
-        patched_func = mock.patch.object(imagecache.utilsfactory,
-                                         "get_hostutils")
-        patched_get_pathutils = mock.patch.object(imagecache.utilsfactory,
-                                                  "get_pathutils")
-        patched_func.start()
-        patched_get_pathutils.start()
-        self.addCleanup(patched_func.stop)
-        self.addCleanup(patched_get_pathutils.stop)
-
         self.imagecache = imagecache.ImageCache()
         self.imagecache._pathutils = mock.MagicMock()
         self.imagecache._vhdutils = mock.MagicMock()
+
+    def test_get_cached_image_no_image_id(self):
+        self.instance.image_ref = None
+
+        result = self.imagecache.get_cached_image(self.context, self.instance)
+        self.assertIsNone(result)
 
     def _prepare_get_cached_image(self, path_exists, use_cow):
         self.instance.image_ref = self.FAKE_IMAGE_REF
