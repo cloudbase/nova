@@ -277,6 +277,11 @@ class BaseVolumeDriver(object):
                                        slot)
 
     def detach_volume(self, connection_info, instance_name):
+        if self._vmutils.planned_vm_exists(instance_name):
+            LOG.warning("Instance %s is a Planned VM, cannot detach "
+                        "volumes from it.", instance_name)
+            return
+
         disk_path = self.get_disk_resource_path(connection_info)
 
         LOG.debug("Detaching disk %(disk_path)s "
